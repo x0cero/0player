@@ -31,6 +31,8 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>
     let mut history: Vec<(String, String)> = Vec::new(); // (assistant reply, action taken)
     let mut turn: u64 = 0;
     let mut last_png: Vec<u8> = Vec::new();
+    let mut stuck_turns: u32 = 0;
+    let mut tried_while_stuck: Vec<&'static str> = Vec::new();
 
     loop {
         if shared.paused() {
@@ -40,6 +42,12 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>
         turn += 1;
         let png = emu.screenshot_png(cfg.scale);
         let unchanged = png == last_png;
+        if unchanged {
+            stuck_turns += 1;
+        } else {
+            stuck_turns = 0;
+            tried_while_stuck.clear();
+        }
         last_png = png.clone();
         shared.publish_frame(&emu.screenshot_png(2));
 
@@ -61,13 +69,33 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>
                 images: None,
             });
         }
+        let all_buttons = ["A", "B", "START", "SELECT", "UP", "DOWN", "LEFT", "RIGHT"];
+        let content = if stuck_turns >= 2 {
+            let untried: Vec<&str> = all_buttons
+                .iter()
+                .filter(|b| !tried_while_stuck.contains(*b))
+                .copied()
+                .collect();
+            format!(
+                "Here is the current screen. It has been IDENTICAL for {} turns. \
+                 Since it last changed you already tried: {}. Those do nothing here. \
+                 You MUST pick from the buttons you have not tried yet: {}.",
+                stuck_turns + 1,
+                tried_while_stuck.join(" "),
+                if untried.is_empty() {
+                    "(all tried; try pressing the same button several times in a row, like UP UP UP)".to_string()
+                } else {
+                    untried.join(" ")
+                }
+            )
+        } else if unchanged {
+            "Here is the current screen. It looks IDENTICAL to last turn, so your last action did nothing.".to_string()
+        } else {
+            "Here is the current screen.".to_string()
+        };
         messages.push(Message {
             role: "user".into(),
-            content: if unchanged {
-                "Here is the current screen. It looks IDENTICAL to last turn.".into()
-            } else {
-                "Here is the current screen.".into()
-            },
+            content,
             images: Some(vec![b64]),
         });
 
@@ -100,6 +128,10 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>
         }
         for b in &buttons {
             emu.press(*b, cfg.hold_frames, cfg.settle_frames);
+            let name = b.name();
+            if !tried_while_stuck.contains(&name) {
+                tried_while_stuck.push(name);
+            }
         }
 
         history.push((reply, action_str));

@@ -100,6 +100,10 @@
   const action = document.getElementById('action');
   let current = null;
 
+  frame.addEventListener('error', () => {
+    setTimeout(() => { frame.src = '/frame.png?t=' + Date.now(); }, 1000);
+  });
+
   const es = new EventSource('/events');
   es.addEventListener('frame', () => {
     frame.src = '/frame.png?t=' + Date.now();
