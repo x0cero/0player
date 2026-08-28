@@ -185,13 +185,17 @@ fn parse_action(reply: &str) -> Vec<Button> {
     // Take the FIRST "ACTION:" line: when a small model degenerates into a
     // list of ACTION lines, the first is its genuine choice and the rest are
     // babble.
-    let line = reply
-        .lines()
-        .find(|l| l.trim_start().to_ascii_uppercase().starts_with("ACTION:"));
-    let Some(line) = line else { return Vec::new() };
-    let rest = &line.trim_start()[7..];
-    rest.split_whitespace()
-        .filter_map(Button::parse)
-        .take(5)
-        .collect()
+    // Models glue the marker to prose ("...reach it.ACTION: UP"), so accept
+    // ACTION: anywhere in a line, not only at the start.
+    for line in reply.lines() {
+        if let Some(pos) = line.to_ascii_uppercase().find("ACTION:") {
+            return line[pos + 7..]
+                .split_whitespace()
+                .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphabetic()))
+                .filter_map(Button::parse)
+                .take(5)
+                .collect();
+        }
+    }
+    Vec::new()
 }
