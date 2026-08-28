@@ -407,6 +407,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gba"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "cpal",
+ "minifb",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1987,6 +1997,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "gameboy",
+ "gba",
  "image",
  "serde",
  "serde_json",

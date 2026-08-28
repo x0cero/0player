@@ -1,4 +1,5 @@
 target/
 *.gb
 *.gbc
+*.gba
 *.sav

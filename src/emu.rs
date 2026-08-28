@@ -48,17 +48,42 @@ impl Button {
     }
 }
 
+enum Core {
+    /// Game Boy / Game Boy Color.
+    Gb(Cpu),
+    /// Game Boy Advance, driven through the gba crate's C FFI surface.
+    Gba { handle: *mut std::ffi::c_void, keys: u16 },
+}
+
+// The GBA handle is only ever touched from the agent thread.
+unsafe impl Send for Core {}
+
 pub struct Emulator {
-    cpu: Cpu,
+    core: Core,
     title: String,
 }
 
 impl Emulator {
     pub fn new(rom_path: &str) -> std::io::Result<Self> {
-        let cart = Cartridge::load(rom_path)?;
-        let title = cart.title();
-        let bus = Bus::new(cart);
-        Ok(Self { cpu: Cpu::new(bus), title })
+        if rom_path.to_ascii_lowercase().ends_with(".gba") {
+            let rom = std::fs::read(rom_path)?;
+            let title = String::from_utf8_lossy(&rom[0xA0..0xAC])
+                .trim_end_matches(['\0', ' '])
+                .to_string();
+            let handle = gba::gba_create(rom.as_ptr(), rom.len(), std::ptr::null(), 0);
+            Ok(Self {
+                core: Core::Gba { handle, keys: 0x3FF },
+                title,
+            })
+        } else {
+            let cart = Cartridge::load(rom_path)?;
+            let title = cart.title();
+            let bus = Bus::new(cart);
+            Ok(Self {
+                core: Core::Gb(Cpu::new(bus)),
+                title,
+            })
+        }
     }
 
     pub fn title(&self) -> String {
@@ -67,12 +92,21 @@ impl Emulator {
 
     /// Run exactly `n` frames of emulated time.
     pub fn run_frames(&mut self, n: u32) {
-        for _ in 0..n {
-            let mut cycles = 0u32;
-            while cycles < CYCLES_PER_FRAME {
-                let m = self.cpu.step();
-                self.cpu.bus.tick(m * 4);
-                cycles += m * 4;
+        match &mut self.core {
+            Core::Gb(cpu) => {
+                for _ in 0..n {
+                    let mut cycles = 0u32;
+                    while cycles < CYCLES_PER_FRAME {
+                        let m = cpu.step();
+                        cpu.bus.tick(m * 4);
+                        cycles += m * 4;
+                    }
+                }
+            }
+            Core::Gba { handle, keys } => {
+                for _ in 0..n {
+                    gba::gba_run_frame(*handle, *keys);
+                }
             }
         }
     }
@@ -87,36 +121,69 @@ impl Emulator {
     }
 
     fn set_button(&mut self, button: Button, down: bool) {
-        // Active-low: 0 = pressed. joy_buttons bits 3-0 = start, select, B, A;
-        // joy_dpad bits 3-0 = down, up, left, right.
-        let (field, bit): (&mut u8, u8) = match button {
-            Button::A => (&mut self.cpu.bus.joy_buttons, 0),
-            Button::B => (&mut self.cpu.bus.joy_buttons, 1),
-            Button::Select => (&mut self.cpu.bus.joy_buttons, 2),
-            Button::Start => (&mut self.cpu.bus.joy_buttons, 3),
-            Button::Right => (&mut self.cpu.bus.joy_dpad, 0),
-            Button::Left => (&mut self.cpu.bus.joy_dpad, 1),
-            Button::Up => (&mut self.cpu.bus.joy_dpad, 2),
-            Button::Down => (&mut self.cpu.bus.joy_dpad, 3),
-        };
-        if down {
-            *field &= !(1 << bit);
-        } else {
-            *field |= 1 << bit;
+        match &mut self.core {
+            Core::Gb(cpu) => {
+                // Active-low: 0 = pressed. joy_buttons bits 3-0 = start,
+                // select, B, A; joy_dpad bits 3-0 = down, up, left, right.
+                let (field, bit): (&mut u8, u8) = match button {
+                    Button::A => (&mut cpu.bus.joy_buttons, 0),
+                    Button::B => (&mut cpu.bus.joy_buttons, 1),
+                    Button::Select => (&mut cpu.bus.joy_buttons, 2),
+                    Button::Start => (&mut cpu.bus.joy_buttons, 3),
+                    Button::Right => (&mut cpu.bus.joy_dpad, 0),
+                    Button::Left => (&mut cpu.bus.joy_dpad, 1),
+                    Button::Up => (&mut cpu.bus.joy_dpad, 2),
+                    Button::Down => (&mut cpu.bus.joy_dpad, 3),
+                };
+                if down {
+                    *field &= !(1 << bit);
+                } else {
+                    *field |= 1 << bit;
+                }
+            }
+            Core::Gba { keys, .. } => {
+                // KEYINPUT, active-low: 0 A, 1 B, 2 Select, 3 Start,
+                // 4 Right, 5 Left, 6 Up, 7 Down.
+                let bit = match button {
+                    Button::A => 0,
+                    Button::B => 1,
+                    Button::Select => 2,
+                    Button::Start => 3,
+                    Button::Right => 4,
+                    Button::Left => 5,
+                    Button::Up => 6,
+                    Button::Down => 7,
+                };
+                if down {
+                    *keys &= !(1 << bit);
+                } else {
+                    *keys |= 1 << bit;
+                }
+            }
         }
     }
 
-    pub fn read_memory(&self, addr: u16) -> u8 {
-        self.cpu.bus.read(addr)
+    fn screen(&self) -> (&[u32], usize, usize) {
+        match &self.core {
+            Core::Gb(cpu) => (&cpu.bus.ppu.framebuffer, WIDTH, HEIGHT),
+            Core::Gba { handle, .. } => {
+                let ptr = gba::gba_framebuffer(*handle);
+                let fb = unsafe {
+                    std::slice::from_raw_parts(ptr, gba::ppu::WIDTH * gba::ppu::HEIGHT)
+                };
+                (fb, gba::ppu::WIDTH, gba::ppu::HEIGHT)
+            }
+        }
     }
 
     /// PNG screenshot scaled up by an integer factor (vision models read the
-    /// tiny 160x144 frame much better at 3-4x).
+    /// tiny native frame much better at 3-4x).
     pub fn screenshot_png(&self, scale: u32) -> Vec<u8> {
-        let mut img = image::RgbImage::new(WIDTH as u32 * scale, HEIGHT as u32 * scale);
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                let px = self.cpu.bus.ppu.framebuffer[y * WIDTH + x];
+        let (fb, w, h) = self.screen();
+        let mut img = image::RgbImage::new(w as u32 * scale, h as u32 * scale);
+        for y in 0..h {
+            for x in 0..w {
+                let px = fb[y * w + x];
                 let rgb = image::Rgb([(px >> 16) as u8, (px >> 8) as u8, px as u8]);
                 for dy in 0..scale {
                     for dx in 0..scale {
