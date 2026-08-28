@@ -33,6 +33,7 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
     let mut last_png: Vec<u8> = Vec::new();
     let mut stuck_turns: u32 = 0;
     let mut tried_while_stuck: Vec<&'static str> = Vec::new();
+    let mut recent_positions: Vec<String> = Vec::new();
 
     loop {
         if shared.paused() {
@@ -96,7 +97,30 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             "Here is the current screen.".to_string()
         };
         let content = match &game_state {
-            Some(s) => format!("{content}\n{s}"),
+            Some(s) => {
+                // Breadcrumbs: coordinates over the last several turns let
+                // the model notice it is pacing in a loop.
+                if let Some(xy) = s
+                    .split("x=")
+                    .nth(1)
+                    .and_then(|r| r.split('.').next())
+                    .map(|r| format!("({})", r.replace(" y=", ",").trim().to_string()))
+                {
+                    recent_positions.push(xy);
+                    if recent_positions.len() > 8 {
+                        recent_positions.remove(0);
+                    }
+                }
+                let trail = if recent_positions.len() > 1 {
+                    format!(
+                        "\nYour positions over the last turns, oldest first: {}. If these repeat back and forth, you are pacing in a loop; commit to one direction for several steps instead.",
+                        recent_positions.join(" ")
+                    )
+                } else {
+                    String::new()
+                };
+                format!("{content}\n{s}{trail}")
+            }
             None => content,
         };
         messages.push(Message {

@@ -53,7 +53,9 @@ impl Ollama {
             stream: true,
             options: Options {
                 temperature: 0.4,
-                num_predict: 200,
+                // Thinking models spend tokens reasoning before the ACTION
+                // line; the early-cutoff below keeps turns short anyway.
+                num_predict: 900,
                 repeat_penalty: 1.15,
             },
         };
@@ -80,7 +82,15 @@ impl Ollama {
                 .and_then(|c| c.as_str())
             {
                 if !think.is_empty() {
+                    // Counts toward the reply too: if the model only writes
+                    // its ACTION inside the thinking stream, we still see it.
+                    full.push_str(think);
                     on_token(think);
+                    if let Some(pos) = full.to_ascii_uppercase().find("ACTION:") {
+                        if full[pos..].contains('\n') {
+                            break;
+                        }
+                    }
                 }
             }
             if let Some(tok) = v
