@@ -24,6 +24,7 @@ pub struct Message {
 struct Options {
     temperature: f32,
     num_predict: i32,
+    repeat_penalty: f32,
 }
 
 pub struct Ollama {
@@ -52,7 +53,8 @@ impl Ollama {
             stream: true,
             options: Options {
                 temperature: 0.4,
-                num_predict: 512,
+                num_predict: 200,
+                repeat_penalty: 1.15,
             },
         };
         let resp = ureq::post(&format!("{}/api/chat", self.host))

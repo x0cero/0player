@@ -103,6 +103,9 @@
   frame.addEventListener('error', () => {
     setTimeout(() => { frame.src = '/frame.png?t=' + Date.now(); }, 1000);
   });
+  // Belt and braces: refresh the frame on a timer too, so a missed or failed
+  // load can never leave the screen stale.
+  setInterval(() => { frame.src = '/frame.png?t=' + Date.now(); }, 2000);
 
   const es = new EventSource('/events');
   es.addEventListener('frame', () => {

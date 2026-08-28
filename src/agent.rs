@@ -9,7 +9,8 @@ use std::sync::Arc;
 const SYSTEM_PROMPT: &str = "You are playing a Game Boy game. Each turn you see a screenshot of the current screen.\n\
 Think briefly about what is happening and what to do next, then end your reply with exactly one line:\n\
 ACTION: <buttons>\n\
-where <buttons> is 1-5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT.\n\
+where <buttons> is AT MOST 5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT.\n\
+Never write more than 5 buttons; anything past the fifth is ignored.\n\
 Buttons are pressed one after another, one tap each. Examples:\n\
 ACTION: A\n\
 ACTION: UP UP A\n\
