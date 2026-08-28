@@ -135,7 +135,14 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>
             }
         }
 
-        history.push((reply, action_str));
+        // Keep only the head of the reply in history: feeding a degenerate
+        // button-spam reply back to the model teaches it to keep spamming.
+        let mut trimmed: String = reply.chars().take(300).collect();
+        if trimmed.len() < reply.len() {
+            trimmed.push_str("...");
+        }
+        trimmed.push_str(&format!("\nACTION: {action_str}"));
+        history.push((trimmed, action_str));
         if history.len() > 32 {
             history.remove(0);
         }

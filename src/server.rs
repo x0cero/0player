@@ -65,7 +65,9 @@ pub fn serve(shared: Arc<Shared>, port: u16) {
     eprintln!("viewer: http://localhost:{port}");
     for request in server.incoming_requests() {
         let shared = shared.clone();
-        match request.url() {
+        // Match on the path only; the viewer adds ?t= cache-busters.
+        let path = request.url().split('?').next().unwrap_or("/").to_string();
+        match path.as_str() {
             "/" => {
                 let resp = tiny_http::Response::from_string(INDEX_HTML).with_header(
                     tiny_http::Header::from_bytes("Content-Type", "text/html; charset=utf-8")
