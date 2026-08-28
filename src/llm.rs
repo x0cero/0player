@@ -73,6 +73,16 @@ impl Ollama {
             if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
                 return Err(err.to_string());
             }
+            // Thinking models stream their reasoning separately; show it too.
+            if let Some(think) = v
+                .get("message")
+                .and_then(|m| m.get("thinking"))
+                .and_then(|c| c.as_str())
+            {
+                if !think.is_empty() {
+                    on_token(think);
+                }
+            }
             if let Some(tok) = v
                 .get("message")
                 .and_then(|m| m.get("content"))
@@ -81,6 +91,13 @@ impl Ollama {
                 if !tok.is_empty() {
                     full.push_str(tok);
                     on_token(tok);
+                    // Cut generation once a complete ACTION line exists;
+                    // anything after it is discarded anyway.
+                    if let Some(pos) = full.to_ascii_uppercase().find("ACTION:") {
+                        if full[pos..].contains('\n') {
+                            break;
+                        }
+                    }
                 }
             }
             if v.get("done").and_then(|d| d.as_bool()) == Some(true) {

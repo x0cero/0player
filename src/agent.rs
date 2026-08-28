@@ -7,8 +7,9 @@ use base64::Engine;
 use std::sync::Arc;
 
 const SYSTEM_PROMPT: &str = "You are playing a Game Boy game. Each turn you see a screenshot of the current screen.\n\
-Think briefly about what is happening and what to do next, then end your reply with exactly one line:\n\
+Think briefly about what is happening and what to do next, then end your reply with EXACTLY ONE line of the form:\n\
 ACTION: <buttons>\n\
+Write the word ACTION exactly once in your whole reply. Multiple ACTION lines are a protocol violation and all but the first are discarded.\n\
 where <buttons> is AT MOST 5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT.\n\
 Never write more than 5 buttons; anything past the fifth is ignored.\n\
 Buttons are pressed one after another, one tap each. Examples:\n\
@@ -135,14 +136,21 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>
             }
         }
 
-        // Keep only the head of the reply in history: feeding a degenerate
-        // button-spam reply back to the model teaches it to keep spamming.
-        let mut trimmed: String = reply.chars().take(300).collect();
-        if trimmed.len() < reply.len() {
-            trimmed.push_str("...");
-        }
-        trimmed.push_str(&format!("\nACTION: {action_str}"));
-        history.push((trimmed, action_str));
+        // History gets ONLY the thought before the first ACTION line plus the
+        // action actually taken. Feeding a degenerate button-spam reply back
+        // teaches the model to keep spamming.
+        let thought: String = reply
+            .lines()
+            .take_while(|l| !l.trim_start().to_ascii_uppercase().starts_with("ACTION:"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .chars()
+            .take(240)
+            .collect();
+        history.push((
+            format!("{}\nACTION: {action_str}", thought.trim()),
+            action_str,
+        ));
         if history.len() > 32 {
             history.remove(0);
         }
@@ -150,10 +158,11 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>
 }
 
 fn parse_action(reply: &str) -> Vec<Button> {
-    // Take the LAST "ACTION:" line so thinking about actions doesn't count.
+    // Take the FIRST "ACTION:" line: when a small model degenerates into a
+    // list of ACTION lines, the first is its genuine choice and the rest are
+    // babble.
     let line = reply
         .lines()
-        .rev()
         .find(|l| l.trim_start().to_ascii_uppercase().starts_with("ACTION:"));
     let Some(line) = line else { return Vec::new() };
     let rest = &line.trim_start()[7..];
