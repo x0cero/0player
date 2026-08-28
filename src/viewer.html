@@ -55,9 +55,12 @@
     padding: 24px;
     border-right: 1px solid var(--line);
   }
+  .screen {
+    max-width: min(540px, 62vw);
+  }
   .screen img {
     width: 480px;
-    max-width: 60vw;
+    max-width: 100%;
     image-rendering: pixelated;
     border: 1px solid var(--line);
     background: #000;
@@ -132,10 +135,10 @@
     if (!el) {
       el = document.createElement('div');
       el.id = 'gstate';
-      el.style.cssText = 'color:var(--dim);font-size:12px;';
+      el.style.cssText = 'color:var(--dim);font-size:12px;max-width:480px;text-align:center;';
       action.parentNode.appendChild(el);
     }
-    el.textContent = s.split('(')[0].trim();
+    el.textContent = (s.split('.')[0] || '').trim();
   });
   es.addEventListener('error-msg', () => {});
   es.addEventListener('error', (e) => {
