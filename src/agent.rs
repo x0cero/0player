@@ -40,7 +40,10 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             continue;
         }
         turn += 1;
-        let png = emu.screenshot(cfg.scale);
+        let (png, game_state) = emu.screenshot(cfg.scale);
+        if let Some(s) = &game_state {
+            shared.publish(Event::GameState(s.clone()));
+        }
         let unchanged = png == last_png;
         if unchanged {
             stuck_turns += 1;
@@ -91,6 +94,10 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             "Here is the current screen. It looks IDENTICAL to last turn, so your last action did nothing.".to_string()
         } else {
             "Here is the current screen.".to_string()
+        };
+        let content = match &game_state {
+            Some(s) => format!("{content}\n{s}"),
+            None => content,
         };
         messages.push(Message {
             role: "user".into(),

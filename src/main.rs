@@ -1,3 +1,4 @@
+mod adapter;
 mod agent;
 mod emu;
 mod llm;

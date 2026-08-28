@@ -124,6 +124,27 @@ impl Emulator {
         }
     }
 
+    /// Read GBA memory (the FFI handle is a boxed gba::cpu::Cpu, same crate).
+    pub fn gba_read32(&mut self, addr: u32) -> Option<u32> {
+        match &mut self.core {
+            Core::Gba { handle, .. } => {
+                let cpu = unsafe { &mut *(*handle as *mut gba::cpu::Cpu) };
+                Some(cpu.bus.read32(addr))
+            }
+            Core::Gb(_) => None,
+        }
+    }
+
+    pub fn gba_read16(&mut self, addr: u32) -> Option<u16> {
+        match &mut self.core {
+            Core::Gba { handle, .. } => {
+                let cpu = unsafe { &mut *(*handle as *mut gba::cpu::Cpu) };
+                Some(cpu.bus.read16(addr))
+            }
+            Core::Gb(_) => None,
+        }
+    }
+
     /// Run exactly `n` frames of emulated time.
     pub fn run_frames(&mut self, n: u32) {
         match &mut self.core {

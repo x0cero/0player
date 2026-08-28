@@ -11,6 +11,7 @@ pub enum Event {
     TurnStart { turn: u64 },
     Token(String),
     Action(String),
+    GameState(String),
     Error(String),
 }
 
@@ -20,6 +21,7 @@ impl Event {
             Event::TurnStart { turn } => ("turn", turn.to_string()),
             Event::Token(t) => ("token", serde_json::to_string(t).unwrap()),
             Event::Action(a) => ("action", serde_json::to_string(a).unwrap()),
+            Event::GameState(s) => ("state", serde_json::to_string(s).unwrap()),
             Event::Error(e) => ("error", serde_json::to_string(e).unwrap()),
         };
         format!("event: {kind}\ndata: {data}\n\n")

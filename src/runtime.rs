@@ -12,9 +12,13 @@ use std::time::{Duration, Instant};
 pub enum Cmd {
     /// Queue button taps, executed one after another in emulated time.
     Press(Vec<Button>),
-    /// Reply with a PNG of the screen once the press queue is empty, so the
-    /// model always sees the state AFTER its last action.
-    Screenshot { scale: u32, resp: Sender<Vec<u8>> },
+    /// Reply with a PNG of the screen (plus any adapter-provided game state)
+    /// once the press queue is empty, so the model always sees the state
+    /// AFTER its last action.
+    Screenshot {
+        scale: u32,
+        resp: Sender<(Vec<u8>, Option<String>)>,
+    },
 }
 
 #[derive(Clone)]
@@ -27,8 +31,9 @@ impl EmuHandle {
         let _ = self.tx.send(Cmd::Press(buttons));
     }
 
-    /// Blocks until the queued presses have played out and returns the frame.
-    pub fn screenshot(&self, scale: u32) -> Vec<u8> {
+    /// Blocks until the queued presses have played out; returns the frame
+    /// and any game-state line the adapter could read.
+    pub fn screenshot(&self, scale: u32) -> (Vec<u8>, Option<String>) {
         let (resp, rx) = channel();
         let _ = self.tx.send(Cmd::Screenshot { scale, resp });
         rx.recv().unwrap_or_default()
@@ -58,7 +63,7 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
         let mut queue: Vec<Button> = Vec::new();
         let mut phase: u32 = 0; // frames left in current hold/gap
         let mut holding: Option<Button> = None;
-        let mut pending_shot: Option<(u32, Sender<Vec<u8>>)> = None;
+        let mut pending_shot: Option<(u32, Sender<(Vec<u8>, Option<String>)>)> = None;
         let mut frame: u64 = 0;
         let mut next_deadline = Instant::now();
 
@@ -93,7 +98,8 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
             // The model sees the world only after its inputs played out.
             if queue.is_empty() && holding.is_none() && phase == 0 {
                 if let Some((scale, resp)) = pending_shot.take() {
-                    let _ = resp.send(emu.screenshot_png(scale));
+                    let state = crate::adapter::probe(&mut emu);
+                    let _ = resp.send((emu.screenshot_png(scale), state));
                 }
             }
 

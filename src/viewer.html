@@ -126,6 +126,17 @@
   es.addEventListener('action', (e) => {
     action.textContent = 'ACTION  ' + JSON.parse(e.data);
   });
+  es.addEventListener('state', (e) => {
+    const s = JSON.parse(e.data);
+    let el = document.getElementById('gstate');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'gstate';
+      el.style.cssText = 'color:var(--dim);font-size:12px;';
+      action.parentNode.appendChild(el);
+    }
+    el.textContent = s.split('(')[0].trim();
+  });
   es.addEventListener('error-msg', () => {});
   es.addEventListener('error', (e) => {
     if (e.data === undefined) return; // connection-level errors have no data
