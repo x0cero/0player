@@ -61,7 +61,14 @@ fn main() {
         history_turns: 6,
     };
 
+    let io = agent::AgentIo {
+        state_path: if rom.to_ascii_lowercase().ends_with(".gba") {
+            format!("{rom}.0pstate")
+        } else {
+            String::new()
+        },
+    };
     let agent_shared = shared.clone();
-    std::thread::spawn(move || agent::run(emu, llm, cfg, agent_shared));
+    std::thread::spawn(move || agent::run(emu, llm, cfg, io, agent_shared));
     server::serve(shared, port);
 }

@@ -26,9 +26,29 @@ pub struct AgentConfig {
     pub history_turns: usize,
 }
 
-pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
-    // Boot past the logo before the first look.
+pub struct AgentIo {
+    /// Where machine state is periodically saved so a restart resumes
+    /// instead of replaying from power-on. Empty disables persistence.
+    pub state_path: String,
+}
+
+pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, io: AgentIo, shared: Arc<Shared>) {
+    // A held press must last a full step on GBA; a tap only turns you.
+    let hold = if emu.is_gba() {
+        cfg.hold_frames.max(20)
+    } else {
+        cfg.hold_frames
+    };
+
+    // Boot past the logo before the first look, or resume a saved state.
     emu.run_frames(120);
+    if !io.state_path.is_empty() {
+        if let Ok(state) = std::fs::read(&io.state_path) {
+            if emu.state_load(&state) {
+                shared.publish(Event::Action("(resumed saved state)".into()));
+            }
+        }
+    }
 
     let mut history: Vec<(String, String)> = Vec::new(); // (assistant reply, action taken)
     let mut turn: u64 = 0;
@@ -129,10 +149,16 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>
             emu.run_frames(30);
         }
         for b in &buttons {
-            emu.press(*b, cfg.hold_frames, cfg.settle_frames);
+            emu.press(*b, hold, cfg.settle_frames);
             let name = b.name();
             if !tried_while_stuck.contains(&name) {
                 tried_while_stuck.push(name);
+            }
+        }
+
+        if !io.state_path.is_empty() && turn % 10 == 0 {
+            if let Some(state) = emu.state_save() {
+                let _ = std::fs::write(&io.state_path, state);
             }
         }
 

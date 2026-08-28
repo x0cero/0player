@@ -90,6 +90,35 @@ impl Emulator {
         self.title.clone()
     }
 
+    /// A held d-pad press on GBA needs enough frames to take a full step;
+    /// a short tap only turns the character in many games.
+    pub fn is_gba(&self) -> bool {
+        matches!(self.core, Core::Gba { .. })
+    }
+
+    /// Serialize full machine state (GBA only for now).
+    pub fn state_save(&mut self) -> Option<Vec<u8>> {
+        match &self.core {
+            Core::Gba { handle, .. } => {
+                let mut buf = vec![0u8; 16 * 1024 * 1024];
+                let n = gba::gba_state_save(*handle, buf.as_mut_ptr(), buf.len());
+                if n == 0 {
+                    return None;
+                }
+                buf.truncate(n);
+                Some(buf)
+            }
+            Core::Gb(_) => None,
+        }
+    }
+
+    pub fn state_load(&mut self, data: &[u8]) -> bool {
+        match &self.core {
+            Core::Gba { handle, .. } => gba::gba_state_load(*handle, data.as_ptr(), data.len()),
+            Core::Gb(_) => false,
+        }
+    }
+
     /// Run exactly `n` frames of emulated time.
     pub fn run_frames(&mut self, n: u32) {
         match &mut self.core {
