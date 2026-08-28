@@ -1,6 +1,7 @@
 mod agent;
 mod emu;
 mod llm;
+mod runtime;
 mod server;
 
 use std::sync::Arc;
@@ -53,22 +54,21 @@ fn main() {
 
     let shared = Arc::new(server::Shared::new());
     let llm = llm::Ollama::new(&host, &model);
+    let is_gba = rom.to_ascii_lowercase().ends_with(".gba");
+    let rt_cfg = runtime::RuntimeConfig {
+        hold_frames: if is_gba { 20 } else { 8 },
+        gap_frames: 10,
+        state_path: if is_gba { format!("{rom}.0pstate") } else { String::new() },
+        publish_every: 6, // ~10 viewer frames per second
+    };
+    let handle = runtime::spawn(emu, rt_cfg, shared.clone());
+
     let cfg = agent::AgentConfig {
         goal,
         scale: 3,
-        hold_frames: 8,
-        settle_frames: 45,
         history_turns: 6,
     };
-
-    let io = agent::AgentIo {
-        state_path: if rom.to_ascii_lowercase().ends_with(".gba") {
-            format!("{rom}.0pstate")
-        } else {
-            String::new()
-        },
-    };
     let agent_shared = shared.clone();
-    std::thread::spawn(move || agent::run(emu, llm, cfg, io, agent_shared));
+    std::thread::spawn(move || agent::run(handle, llm, cfg, agent_shared));
     server::serve(shared, port);
 }

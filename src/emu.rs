@@ -100,7 +100,12 @@ impl Emulator {
     pub fn state_save(&mut self) -> Option<Vec<u8>> {
         match &self.core {
             Core::Gba { handle, .. } => {
-                let mut buf = vec![0u8; 16 * 1024 * 1024];
+                // First call with a null buffer reports the required size.
+                let need = gba::gba_state_save(*handle, std::ptr::null_mut(), 0);
+                if need == 0 {
+                    return None;
+                }
+                let mut buf = vec![0u8; need];
                 let n = gba::gba_state_save(*handle, buf.as_mut_ptr(), buf.len());
                 if n == 0 {
                     return None;
@@ -140,13 +145,12 @@ impl Emulator {
         }
     }
 
-    /// Hold a button for `hold` frames, release, then run `settle` frames so
-    /// the game can react before the next screenshot.
-    pub fn press(&mut self, button: Button, hold: u32, settle: u32) {
+    pub fn hold(&mut self, button: Button) {
         self.set_button(button, true);
-        self.run_frames(hold);
+    }
+
+    pub fn release(&mut self, button: Button) {
         self.set_button(button, false);
-        self.run_frames(settle);
     }
 
     fn set_button(&mut self, button: Button, down: bool) {

@@ -1,17 +1,20 @@
-//! The agent loop: look at the screen, think out loud, press buttons.
+//! The agent loop: look at the screen, think out loud, press buttons. The
+//! emulator runs in real time on its own thread (see runtime.rs); this loop
+//! only samples it and injects inputs.
 
-use crate::emu::{Button, Emulator};
+use crate::emu::Button;
 use crate::llm::{Message, Ollama};
+use crate::runtime::EmuHandle;
 use crate::server::{Event, Shared};
 use base64::Engine;
 use std::sync::Arc;
 
 const SYSTEM_PROMPT: &str = "You are playing a Game Boy game. Each turn you see a screenshot of the current screen.\n\
+The game runs in REAL TIME and keeps running while you think.\n\
 Think briefly about what is happening and what to do next, then end your reply with EXACTLY ONE line of the form:\n\
 ACTION: <buttons>\n\
 Write the word ACTION exactly once in your whole reply. Multiple ACTION lines are a protocol violation and all but the first are discarded.\n\
-where <buttons> is AT MOST 5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT.\n\
-Never write more than 5 buttons; anything past the fifth is ignored.\n\
+<buttons> is AT MOST 5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT.\n\
 Buttons are pressed one after another, one tap each. Examples:\n\
 ACTION: A\n\
 ACTION: UP UP A\n\
@@ -21,35 +24,10 @@ Keep your thinking to a few sentences. If the screen did not change since last t
 pub struct AgentConfig {
     pub goal: String,
     pub scale: u32,
-    pub hold_frames: u32,
-    pub settle_frames: u32,
     pub history_turns: usize,
 }
 
-pub struct AgentIo {
-    /// Where machine state is periodically saved so a restart resumes
-    /// instead of replaying from power-on. Empty disables persistence.
-    pub state_path: String,
-}
-
-pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, io: AgentIo, shared: Arc<Shared>) {
-    // A held press must last a full step on GBA; a tap only turns you.
-    let hold = if emu.is_gba() {
-        cfg.hold_frames.max(20)
-    } else {
-        cfg.hold_frames
-    };
-
-    // Boot past the logo before the first look, or resume a saved state.
-    emu.run_frames(120);
-    if !io.state_path.is_empty() {
-        if let Ok(state) = std::fs::read(&io.state_path) {
-            if emu.state_load(&state) {
-                shared.publish(Event::Action("(resumed saved state)".into()));
-            }
-        }
-    }
-
+pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
     let mut history: Vec<(String, String)> = Vec::new(); // (assistant reply, action taken)
     let mut turn: u64 = 0;
     let mut last_png: Vec<u8> = Vec::new();
@@ -62,7 +40,7 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, io: AgentIo, shared
             continue;
         }
         turn += 1;
-        let png = emu.screenshot_png(cfg.scale);
+        let png = emu.screenshot(cfg.scale);
         let unchanged = png == last_png;
         if unchanged {
             stuck_turns += 1;
@@ -71,7 +49,6 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, io: AgentIo, shared
             tried_while_stuck.clear();
         }
         last_png = png.clone();
-        shared.publish_frame(&emu.screenshot_png(2));
 
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
         let mut messages = vec![Message {
@@ -144,23 +121,13 @@ pub fn run(mut emu: Emulator, llm: Ollama, cfg: AgentConfig, io: AgentIo, shared
         };
         shared.publish(Event::Action(action_str.clone()));
 
-        if buttons.is_empty() {
-            // No parsable action: let time pass so the screen can change.
-            emu.run_frames(30);
-        }
         for b in &buttons {
-            emu.press(*b, hold, cfg.settle_frames);
             let name = b.name();
             if !tried_while_stuck.contains(&name) {
                 tried_while_stuck.push(name);
             }
         }
-
-        if !io.state_path.is_empty() && turn % 10 == 0 {
-            if let Some(state) = emu.state_save() {
-                let _ = std::fs::write(&io.state_path, state);
-            }
-        }
+        emu.press(buttons);
 
         // History gets ONLY the thought before the first ACTION line plus the
         // action actually taken. Feeding a degenerate button-spam reply back
