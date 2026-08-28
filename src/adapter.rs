@@ -20,5 +20,9 @@ pub fn probe(emu: &mut Emulator) -> Option<String> {
     if x > 1000 || y > 1000 {
         return None;
     }
-    Some(format!("Player tile position: x={x}, y={y} (from game memory; if it did not change since last turn, your move was blocked by a wall or object)"))
+    Some(format!(
+        "Player tile position from game memory: x={x}, y={y}. \
+         AXES: UP decreases y, DOWN increases y, LEFT decreases x, RIGHT increases x. \
+         If the position did not change since last turn, that move was blocked by a wall or object; do not repeat it."
+    ))
 }
