@@ -157,6 +157,10 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
                     if map.is_some() {
                         last_map = map;
                     }
+                    // The movement check above must run once per completed
+                    // tap; a stale button re-triggering on an unchanged
+                    // position would wipe every freshly queued path.
+                    last_button = None;
                     if let Some(b) = (!queue.is_empty()).then(|| queue.remove(0)) {
                         emu.hold(b);
                         holding = Some(b);

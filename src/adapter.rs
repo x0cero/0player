@@ -218,3 +218,36 @@ pub fn find_path(
     }
     Err(format!("no walkable path to ({tx},{ty}) on this map"))
 }
+
+/// One-off calibration helper for finding the tileset attribute layout.
+pub fn debug_metatile(emu: &mut Emulator, x: i32, y: i32) {
+    let map = walk_map(emu).expect("walk map");
+    let layout = emu.gba_read32(0x0203_6DFC).unwrap_or(0);
+    println!("mapLayout ptr = {layout:08x}");
+    for dy in -1..=1 {
+        let yy = y + dy;
+        let t = map.tiles[((yy + 7) * map.width + (x + 7)) as usize];
+        let id = t & 0x3FF;
+        println!("tile ({x},{yy}): raw={t:04x} metatile={id:03x} collision={}", (t >> 10) & 3);
+        for ts_off in [0x10u32, 0x14] {
+            for attr_off in [0x10u32, 0x14] {
+                let (tsp, local) = if id < 640 {
+                    (emu.gba_read32(layout + ts_off), id)
+                } else {
+                    (emu.gba_read32(layout + ts_off + 4), id - 640)
+                };
+                let Some(tsp) = tsp else { continue };
+                if !(0x0800_0000..0x0A00_0000).contains(&tsp) {
+                    continue;
+                }
+                let Some(attrs) = emu.gba_read32(tsp + attr_off) else { continue };
+                if !(0x0800_0000..0x0A00_0000).contains(&attrs) {
+                    continue;
+                }
+                let a32 = emu.gba_read32(attrs + 4 * local as u32).unwrap_or(0);
+                let a16 = emu.gba_read16(attrs + 2 * local as u32).unwrap_or(0);
+                println!("  ts@+{ts_off:02x} attr@+{attr_off:02x}: u32={a32:08x} (beh {:03x})  u16={a16:04x} (beh {:02x})", a32 & 0x3FF, a16 & 0xFF);
+            }
+        }
+    }
+}

@@ -22,6 +22,14 @@ fn usage() -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("--path") {
+        path_main(&args[2], args[3].parse().unwrap(), args[4].parse().unwrap());
+        return;
+    }
+    if args.get(1).map(|s| s.as_str()) == Some("--probe") {
+        probe_main(&args[2], args[3].parse().unwrap(), args[4].parse().unwrap());
+        return;
+    }
     let mut rom = None;
     let mut model = "qwen2.5vl:7b".to_string();
     let mut host = "http://localhost:11434".to_string();
@@ -42,6 +50,7 @@ fn main() {
         i += 2;
     }
     let rom = rom.unwrap_or_else(|| usage());
+
 
     let emu = match emu::Emulator::new(&rom) {
         Ok(e) => e,
@@ -75,4 +84,31 @@ fn main() {
     let agent_shared = shared.clone();
     std::thread::spawn(move || agent::run(handle, llm, cfg, agent_shared));
     server::serve(shared, port);
+}
+
+/// Hidden calibration: print metatile info around a tile and exit.
+/// Usage: 0player --probe <rom> <x> <y>
+pub fn probe_main(rom: &str, x: i32, y: i32) {
+    let mut emu = emu::Emulator::new(rom).expect("rom");
+    emu.run_frames(120);
+    if let Ok(state) = std::fs::read(format!("{rom}.0pstate")) {
+        emu.state_load(&state);
+    }
+    emu.run_frames(2);
+    adapter::debug_metatile(&mut emu, x, y);
+}
+
+/// Hidden: test pathfinding from the saved state. Usage: 0player --path <rom> <x> <y>
+pub fn path_main(rom: &str, x: i32, y: i32) {
+    let mut emu = emu::Emulator::new(rom).expect("rom");
+    emu.run_frames(120);
+    if let Ok(state) = std::fs::read(format!("{rom}.0pstate")) {
+        println!("state loaded: {}", emu.state_load(&state));
+    }
+    emu.run_frames(2);
+    println!("player at {:?}", adapter::coords(&mut emu));
+    match adapter::find_path(&mut emu, x, y, &std::collections::HashSet::new()) {
+        Ok(steps) => println!("path ({} steps): {:?}", steps.len(), steps.iter().map(|b| b.name()).collect::<Vec<_>>()),
+        Err(e) => println!("ERR: {e}"),
+    }
 }
