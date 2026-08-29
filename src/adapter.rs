@@ -41,6 +41,9 @@ fn mon_stats(emu: &mut Emulator, base: u32) -> Option<(u8, u16, u16)> {
 
 pub fn probe(emu: &mut Emulator) -> Option<String> {
     let (x, y) = coords(emu)?;
+    let map = map_id(emu)
+        .map(|m| format!(" Current map id: {m} (note map names as you learn them)."))
+        .unwrap_or_default();
 
     // Battle telemetry when both sides look sane.
     if let Some((lv, hp, max)) = mon_stats(emu, FRLG_PLAYER_PARTY) {
@@ -54,9 +57,9 @@ pub fn probe(emu: &mut Emulator) -> Option<String> {
                 if ehp == 0 { " It fainted; you won." } else { "" }
             ));
         }
-        return Some(format!("{}{}", position_line(x, y), line));
+        return Some(format!("{}{}{}", position_line(x, y), map, line));
     }
-    Some(position_line(x, y))
+    Some(format!("{}{}", position_line(x, y), map))
 }
 
 fn position_line(x: u16, y: u16) -> String {
@@ -65,4 +68,19 @@ fn position_line(x: u16, y: u16) -> String {
          AXES: UP decreases y, DOWN increases y, LEFT decreases x, RIGHT increases x. \
          If the position did not change since last turn, that move was blocked by a wall or object; do not repeat it."
     )
+}
+
+/// Current map as "group.number"; pairs with notebook lessons like
+/// "map 3.19 is Route 1" so the model learns its own geography.
+pub fn map_id(emu: &mut Emulator) -> Option<String> {
+    if !emu.title().starts_with("POKEMON FIRE") && !emu.title().starts_with("POKEMON LEAF") {
+        return None;
+    }
+    let ptr = emu.gba_read32(FRLG_SAVEBLOCK1_PTR)?;
+    if !(0x0200_0000..0x0204_0000).contains(&ptr) {
+        return None;
+    }
+    let group = emu.gba_read16(ptr + 4)? & 0xFF;
+    let num = (emu.gba_read16(ptr + 4)? >> 8) & 0xFF;
+    Some(format!("{group}.{num}"))
 }

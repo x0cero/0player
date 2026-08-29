@@ -69,6 +69,7 @@ fn main() {
         scale: 3,
         history_turns: 6,
         notes_path: format!("{rom}.0pnotes"),
+        guide_path: format!("{rom}.0pguide"),
     };
     let agent_shared = shared.clone();
     std::thread::spawn(move || agent::run(handle, llm, cfg, agent_shared));

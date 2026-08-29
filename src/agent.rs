@@ -22,6 +22,8 @@ pub struct AgentConfig {
     pub history_turns: usize,
     /// Persistent per-game notebook; lessons survive restarts. Empty disables.
     pub notes_path: String,
+    /// Optional hand-written game guide loaded verbatim into the prompt.
+    pub guide_path: String,
 }
 
 pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
@@ -35,6 +37,12 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
         String::new()
     } else {
         std::fs::read_to_string(&cfg.notes_path).unwrap_or_default()
+    };
+    // A hand-written game manual, distinct from the model's own notebook.
+    let guide = if cfg.guide_path.is_empty() {
+        String::new()
+    } else {
+        std::fs::read_to_string(&cfg.guide_path).unwrap_or_default()
     };
 
     loop {
@@ -61,6 +69,10 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             role: "system".into(),
             content: {
                 let mut c = format!("{SYSTEM_PROMPT}\nYour goal: {}", cfg.goal);
+                if !guide.trim().is_empty() {
+                    c.push_str("\nGame guide:\n");
+                    c.push_str(guide.trim());
+                }
                 if !notes.trim().is_empty() {
                     // Keep the freshest lessons if the notebook grows long.
                     let tail: Vec<&str> = notes.lines().rev().take(50).collect();
