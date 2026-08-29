@@ -154,7 +154,14 @@ pub fn minimap(emu: &mut Emulator) -> Option<String> {
 }
 
 /// BFS path from the player to a map tile; returns per-step buttons.
-pub fn find_path(emu: &mut Emulator, tx: i32, ty: i32) -> Result<Vec<crate::emu::Button>, String> {
+/// `blocked` holds edges proven impassable by actual gameplay (ledge walls,
+/// object collisions the grid doesn't know about).
+pub fn find_path(
+    emu: &mut Emulator,
+    tx: i32,
+    ty: i32,
+    blocked: &std::collections::HashSet<((i32, i32), crate::emu::Button)>,
+) -> Result<Vec<crate::emu::Button>, String> {
     use crate::emu::Button;
     let (px, py) = coords(emu).ok_or("position unreadable")?;
     let map = walk_map(emu).ok_or("map unreadable")?;
@@ -197,6 +204,10 @@ pub fn find_path(emu: &mut Emulator, tx: i32, ty: i32) -> Result<Vec<crate::emu:
         for (dx, dy, _) in dirs {
             let (nx, ny) = (x + dx, y + dy);
             if nx < -7 || ny < -7 || nx + 7 >= w || ny + 7 >= h {
+                continue;
+            }
+            let dir = dirs.iter().find(|(ddx, ddy, _)| (*ddx, *ddy) == (dx, dy)).unwrap().2;
+            if blocked.contains(&((x, y), dir)) {
                 continue;
             }
             if map.walkable(nx, ny) && prev[idx(nx, ny)] == -1 {

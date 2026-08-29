@@ -76,6 +76,8 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
         let mut last_map: Option<String> = None;
         let mut last_button: Option<Button> = None;
         let mut alert: Option<String> = None;
+        let mut blocked: std::collections::HashSet<((i32, i32), Button)> =
+            std::collections::HashSet::new();
         let mut frame: u64 = 0;
         let mut next_deadline = Instant::now();
 
@@ -84,7 +86,7 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
             loop {
                 match rx.try_recv() {
                     Ok(Cmd::Press(b)) => queue.extend(b),
-                    Ok(Cmd::Goto { x, y }) => match crate::adapter::find_path(&mut emu, x, y) {
+                    Ok(Cmd::Goto { x, y }) => match crate::adapter::find_path(&mut emu, x, y, &blocked) {
                         Ok(steps) => {
                             queue.clear();
                             queue.extend(steps);
@@ -131,6 +133,24 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
                             }
                         } else if jump > 2 {
                             queue.clear();
+                        } else if jump == 0
+                            && matches!(
+                                last_button,
+                                Some(Button::Up | Button::Down | Button::Left | Button::Right)
+                            )
+                        {
+                            // A d-pad tap that moved us nowhere: that edge is
+                            // impassable in practice (ledge wall, object).
+                            // Remember it for pathfinding and abort the rest
+                            // of the plan, which assumed the step landed.
+                            blocked.insert(((x as i32, y as i32), last_button.unwrap()));
+                            if !queue.is_empty() {
+                                queue.clear();
+                                alert = Some(format!(
+                                    "ALERT: your step {:?} at ({x},{y}) was blocked (possibly a ledge wall); the rest of the path was cancelled. That edge is now avoided by GOTO; issue GOTO again.",
+                                    last_button.unwrap()
+                                ));
+                            }
                         }
                     }
                     last_pos = pos.or(last_pos);

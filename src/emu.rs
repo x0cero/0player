@@ -7,7 +7,7 @@ use gameboy::cpu::Cpu;
 use gameboy::ppu::{HEIGHT, WIDTH};
 use gameboy::CYCLES_PER_FRAME;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Button {
     A,
     B,
