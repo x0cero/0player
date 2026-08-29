@@ -44,6 +44,8 @@ pub struct RuntimeConfig {
     pub hold_frames: u32,
     pub gap_frames: u32,
     pub state_path: String,
+    /// Notebook file for harness-proven facts (ledge locations etc.).
+    pub notes_path: String,
     /// Publish a viewer frame every this many emulated frames.
     pub publish_every: u64,
 }
@@ -65,6 +67,9 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
         let mut holding: Option<Button> = None;
         let mut pending_shot: Option<(u32, Sender<(Vec<u8>, Option<String>)>)> = None;
         let mut last_pos: Option<(u16, u16)> = None;
+        let mut last_map: Option<String> = None;
+        let mut last_button: Option<Button> = None;
+        let mut alert: Option<String> = None;
         let mut frame: u64 = 0;
         let mut next_deadline = Instant::now();
 
@@ -89,16 +94,40 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
                     // of the queued taps were planned for the old room, so
                     // drop them and let the model look again.
                     let pos = crate::adapter::coords(&mut emu);
+                    let map = crate::adapter::map_id(&mut emu);
                     if let (Some((x, y)), Some((lx, ly))) = (pos, last_pos) {
                         let jump = (x as i32 - lx as i32).abs() + (y as i32 - ly as i32).abs();
-                        if jump > 2 {
+                        let same_map = map.is_some() && map == last_map;
+                        if same_map && y as i32 - ly as i32 >= 2 && last_button != Some(Button::Down) {
+                            // Same map but suddenly 2+ tiles south: a ledge hop.
+                            queue.clear();
+                            let msg = format!(
+                                "ALERT: you just HOPPED A LEDGE at about ({lx},{ly}) and landed at ({x},{y}); you cannot climb back up. Walk around it via the left or right side."
+                            );
+                            alert = Some(msg);
+                            if !cfg.notes_path.is_empty() {
+                                use std::io::Write;
+                                if let Ok(mut f) = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&cfg.notes_path)
+                                {
+                                    let m = map.clone().unwrap_or_default();
+                                    let _ = writeln!(f, "- PROVEN ledge on map {m} near ({lx},{ly}): stepping there hops you south to ({x},{y}); route around it.");
+                                }
+                            }
+                        } else if jump > 2 {
                             queue.clear();
                         }
                     }
                     last_pos = pos.or(last_pos);
+                    if map.is_some() {
+                        last_map = map;
+                    }
                     if let Some(b) = (!queue.is_empty()).then(|| queue.remove(0)) {
                         emu.hold(b);
                         holding = Some(b);
+                        last_button = Some(b);
                         phase = cfg.hold_frames;
                     }
                 }
@@ -111,7 +140,13 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
             // The model sees the world only after its inputs played out.
             if queue.is_empty() && holding.is_none() && phase == 0 {
                 if let Some((scale, resp)) = pending_shot.take() {
-                    let state = crate::adapter::probe(&mut emu);
+                    let mut state = crate::adapter::probe(&mut emu);
+                    if let Some(a) = alert.take() {
+                        state = Some(match state {
+                            Some(s) => format!("{a}\n{s}"),
+                            None => a,
+                        });
+                    }
                     let _ = resp.send((emu.screenshot_png(scale), state));
                 }
             }

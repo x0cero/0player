@@ -60,6 +60,7 @@ fn main() {
         hold_frames: if is_gba { 20 } else { 8 },
         gap_frames: 10,
         state_path: if is_gba { format!("{rom}.0pstate") } else { String::new() },
+        notes_path: format!("{rom}.0pnotes"),
         publish_every: 6, // ~10 viewer frames per second
     };
     let handle = runtime::spawn(emu, rt_cfg, shared.clone());
