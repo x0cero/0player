@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 const SYSTEM_PROMPT: &str = "You are playing a Game Boy game. Each turn you see a screenshot of the current screen.\n\
 The game runs in REAL TIME and keeps running while you think.\n\
-Reply as JSON with two fields: \"thought\" (2-3 sentences at most on what is happening and your plan) and \"action\" (1-5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT).\n\
-Buttons are pressed one after another, one tap each. Example: {\"thought\": \"A dialog box is open, I'll advance it.\", \"action\": \"A\"}\n\
+Reply as JSON with fields: \"thought\" (2-3 sentences at most on what is happening and your plan), \"action\" (1-5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT), and optionally \"note\" (ONE short lesson worth remembering across play sessions: a map fact, a trigger, a trap. Write a note only when you learn something durable, not every turn).\n\
+Buttons are pressed one after another, one tap each. Example: {\"thought\": \"A dialog box is open, I'll advance it.\", \"action\": \"A\", \"note\": \"The lab exit mat is at the bottom-left of the room.\"}\n\
 Rules of thumb: START opens menus or begins the game from a title screen; A confirms and talks to people or advances text; B cancels; the d-pad moves the character or the menu cursor.\n\
 If the screen did not change since last turn, your last action did nothing, so try something different.";
 
@@ -20,6 +20,8 @@ pub struct AgentConfig {
     pub goal: String,
     pub scale: u32,
     pub history_turns: usize,
+    /// Persistent per-game notebook; lessons survive restarts. Empty disables.
+    pub notes_path: String,
 }
 
 pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
@@ -29,6 +31,11 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
     let mut stuck_turns: u32 = 0;
     let mut tried_while_stuck: Vec<&'static str> = Vec::new();
     let mut recent_positions: Vec<String> = Vec::new();
+    let notes = if cfg.notes_path.is_empty() {
+        String::new()
+    } else {
+        std::fs::read_to_string(&cfg.notes_path).unwrap_or_default()
+    };
 
     loop {
         if shared.paused() {
@@ -52,7 +59,17 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
         let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
         let mut messages = vec![Message {
             role: "system".into(),
-            content: format!("{SYSTEM_PROMPT}\nYour goal: {}", cfg.goal),
+            content: {
+                let mut c = format!("{SYSTEM_PROMPT}\nYour goal: {}", cfg.goal);
+                if !notes.trim().is_empty() {
+                    // Keep the freshest lessons if the notebook grows long.
+                    let tail: Vec<&str> = notes.lines().rev().take(50).collect();
+                    let tail: Vec<&str> = tail.into_iter().rev().collect();
+                    c.push_str("\nLessons you saved in previous sessions:\n");
+                    c.push_str(&tail.join("\n"));
+                }
+                c
+            },
             images: None,
         }];
         for (reply, action) in history.iter().rev().take(cfg.history_turns).rev() {
@@ -128,7 +145,8 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             "type": "object",
             "properties": {
                 "thought": {"type": "string"},
-                "action": {"type": "string"}
+                "action": {"type": "string"},
+                "note": {"type": "string"}
             },
             "required": ["thought", "action"]
         });
@@ -143,7 +161,20 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             }
         };
 
-        let (thought, buttons) = parse_reply(&reply);
+        let (thought, buttons, note) = parse_reply(&reply);
+        if let (Some(n), false) = (&note, cfg.notes_path.is_empty()) {
+            let n = n.trim();
+            if !n.is_empty() && !notes.contains(n) {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&cfg.notes_path)
+                {
+                    let _ = writeln!(f, "- {n}");
+                }
+            }
+        }
         let action_str = if buttons.is_empty() {
             "(nothing)".to_string()
         } else {
@@ -176,7 +207,7 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
     }
 }
 
-fn parse_reply(reply: &str) -> (String, Vec<Button>) {
+fn parse_reply(reply: &str) -> (String, Vec<Button>, Option<String>) {
     // Schema-constrained replies are a JSON object; be lenient about any
     // stray text around it.
     let json = reply
@@ -198,10 +229,10 @@ fn parse_reply(reply: &str) -> (String, Vec<Button>) {
                     .take_while(|l| !l.to_ascii_uppercase().contains("ACTION:"))
                     .collect::<Vec<_>>()
                     .join("\n");
-                return (thought.chars().take(240).collect(), buttons);
+                return (thought.chars().take(240).collect(), buttons, None);
             }
         }
-        return (reply.chars().take(240).collect(), Vec::new());
+        return (reply.chars().take(240).collect(), Vec::new(), None);
     };
     let thought = v
         .get("thought")
@@ -217,5 +248,9 @@ fn parse_reply(reply: &str) -> (String, Vec<Button>) {
         .filter_map(Button::parse)
         .take(5)
         .collect();
-    (thought, buttons)
+    let note = v
+        .get("note")
+        .and_then(|n| n.as_str())
+        .map(|n| n.chars().take(200).collect::<String>());
+    (thought, buttons, note)
 }
