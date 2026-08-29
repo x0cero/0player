@@ -11,15 +11,10 @@ use std::sync::Arc;
 
 const SYSTEM_PROMPT: &str = "You are playing a Game Boy game. Each turn you see a screenshot of the current screen.\n\
 The game runs in REAL TIME and keeps running while you think.\n\
-Think briefly about what is happening and what to do next, then end your reply with EXACTLY ONE line of the form:\n\
-ACTION: <buttons>\n\
-Write the word ACTION exactly once in your whole reply. Multiple ACTION lines are a protocol violation and all but the first are discarded.\n\
-<buttons> is AT MOST 5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT.\n\
-Buttons are pressed one after another, one tap each. Examples:\n\
-ACTION: A\n\
-ACTION: UP UP A\n\
+Reply as JSON with two fields: \"thought\" (2-3 sentences at most on what is happening and your plan) and \"action\" (1-5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT).\n\
+Buttons are pressed one after another, one tap each. Example: {\"thought\": \"A dialog box is open, I'll advance it.\", \"action\": \"A\"}\n\
 Rules of thumb: START opens menus or begins the game from a title screen; A confirms and talks to people or advances text; B cancels; the d-pad moves the character or the menu cursor.\n\
-Keep your thinking to a few sentences. If the screen did not change since last turn, your last action did nothing, so try something different.";
+If the screen did not change since last turn, your last action did nothing, so try something different.";
 
 pub struct AgentConfig {
     pub goal: String,
@@ -129,9 +124,17 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             images: Some(vec![b64]),
         });
 
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "thought": {"type": "string"},
+                "action": {"type": "string"}
+            },
+            "required": ["thought", "action"]
+        });
         shared.publish(Event::TurnStart { turn });
         let mut on_token = |tok: &str| shared.publish(Event::Token(tok.to_string()));
-        let reply = match llm.chat(&messages, &mut on_token) {
+        let reply = match llm.chat(&messages, Some(&schema), &mut on_token) {
             Ok(r) => r,
             Err(e) => {
                 shared.publish(Event::Error(e));
@@ -140,7 +143,7 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             }
         };
 
-        let buttons = parse_action(&reply);
+        let (thought, buttons) = parse_reply(&reply);
         let action_str = if buttons.is_empty() {
             "(nothing)".to_string()
         } else {
@@ -160,19 +163,11 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
         }
         emu.press(buttons);
 
-        // History gets ONLY the thought before the first ACTION line plus the
-        // action actually taken. Feeding a degenerate button-spam reply back
-        // teaches the model to keep spamming.
-        let thought: String = reply
-            .lines()
-            .take_while(|l| !l.trim_start().to_ascii_uppercase().starts_with("ACTION:"))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .chars()
-            .take(240)
-            .collect();
+        // History gets a capped thought plus the action actually taken, so a
+        // degenerate reply can't teach the model to keep rambling.
+        let thought: String = thought.chars().take(240).collect();
         history.push((
-            format!("{}\nACTION: {action_str}", thought.trim()),
+            serde_json::json!({"thought": thought.trim(), "action": action_str}).to_string(),
             action_str,
         ));
         if history.len() > 32 {
@@ -181,21 +176,46 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
     }
 }
 
-fn parse_action(reply: &str) -> Vec<Button> {
-    // Take the FIRST "ACTION:" line: when a small model degenerates into a
-    // list of ACTION lines, the first is its genuine choice and the rest are
-    // babble.
-    // Models glue the marker to prose ("...reach it.ACTION: UP"), so accept
-    // ACTION: anywhere in a line, not only at the start.
-    for line in reply.lines() {
-        if let Some(pos) = line.to_ascii_uppercase().find("ACTION:") {
-            return line[pos + 7..]
-                .split_whitespace()
-                .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphabetic()))
-                .filter_map(Button::parse)
-                .take(5)
-                .collect();
+fn parse_reply(reply: &str) -> (String, Vec<Button>) {
+    // Schema-constrained replies are a JSON object; be lenient about any
+    // stray text around it.
+    let json = reply
+        .find('{')
+        .and_then(|s| reply.rfind('}').map(|e| &reply[s..=e]))
+        .and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok());
+    let Some(v) = json else {
+        // Fallback: the model slipped into "ACTION: UP A" prose. Accept it.
+        for line in reply.lines() {
+            if let Some(pos) = line.to_ascii_uppercase().find("ACTION:") {
+                let buttons = line[pos + 7..]
+                    .split_whitespace()
+                    .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphabetic()))
+                    .filter_map(Button::parse)
+                    .take(5)
+                    .collect();
+                let thought: String = reply
+                    .lines()
+                    .take_while(|l| !l.to_ascii_uppercase().contains("ACTION:"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                return (thought.chars().take(240).collect(), buttons);
+            }
         }
-    }
-    Vec::new()
+        return (reply.chars().take(240).collect(), Vec::new());
+    };
+    let thought = v
+        .get("thought")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let buttons = v
+        .get("action")
+        .and_then(|a| a.as_str())
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphabetic()))
+        .filter_map(Button::parse)
+        .take(5)
+        .collect();
+    (thought, buttons)
 }

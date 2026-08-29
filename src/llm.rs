@@ -9,6 +9,10 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: &'a [Message],
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<&'a serde_json::Value>,
     options: Options,
 }
 
@@ -45,12 +49,36 @@ impl Ollama {
     pub fn chat(
         &self,
         messages: &[Message],
+        format: Option<&serde_json::Value>,
         on_token: &mut dyn FnMut(&str),
+    ) -> Result<String, String> {
+        // "low" keeps thinking models terse without dumping reasoning into
+        // the answer (which `false` does on some models).
+        let low = serde_json::Value::String("low".into());
+        self.chat_inner(messages, on_token, Some(&low), format)
+            .or_else(|e| {
+                // Models without thinking levels reject the `think` field.
+                if e.contains("think") {
+                    self.chat_inner(messages, on_token, None, format)
+                } else {
+                    Err(e)
+                }
+            })
+    }
+
+    fn chat_inner(
+        &self,
+        messages: &[Message],
+        on_token: &mut dyn FnMut(&str),
+        think: Option<&serde_json::Value>,
+        format: Option<&serde_json::Value>,
     ) -> Result<String, String> {
         let req = ChatRequest {
             model: &self.model,
             messages,
             stream: true,
+            think,
+            format,
             options: Options {
                 temperature: 0.4,
                 // Thinking models spend tokens reasoning before the ACTION
@@ -82,15 +110,9 @@ impl Ollama {
                 .and_then(|c| c.as_str())
             {
                 if !think.is_empty() {
-                    // Counts toward the reply too: if the model only writes
-                    // its ACTION inside the thinking stream, we still see it.
-                    full.push_str(think);
+                    // Display-only: never mixed into the reply, where it
+                    // would corrupt the JSON the schema forces.
                     on_token(think);
-                    if let Some(pos) = full.to_ascii_uppercase().find("ACTION:") {
-                        if full[pos..].contains('\n') {
-                            break;
-                        }
-                    }
                 }
             }
             if let Some(tok) = v
