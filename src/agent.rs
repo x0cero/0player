@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 const SYSTEM_PROMPT: &str = "You are playing a Game Boy game. Each turn you see a screenshot of the current screen.\n\
 The game runs in REAL TIME and keeps running while you think.\n\
-Reply as JSON with fields: \"thought\" (2-3 sentences at most on what is happening and your plan), \"action\" (1-5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT), and optionally \"note\" (ONE short lesson worth remembering across play sessions: a map fact, a trigger, a trap. Write a note only when you learn something durable, not every turn).\n\
+Reply as JSON with fields: \"thought\" (2-3 sentences at most on what is happening and your plan), \"action\" (1-5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT), optionally \"note\" (ONE short lesson worth remembering across play sessions: a map fact, a trigger, a trap; only when you learn something durable), and optionally \"objective\" (your CURRENT mission in one line; set it when your mission changes and it will be shown back to you every turn until you change it; keep it stable while working on one thing).\n\
 Buttons are pressed one after another, one tap each. Example: {\"thought\": \"A dialog box is open, I'll advance it.\", \"action\": \"A\", \"note\": \"The lab exit mat is at the bottom-left of the room.\"}\n\
 Rules of thumb: START opens menus or begins the game from a title screen; A confirms and talks to people or advances text; B cancels; the d-pad moves the character or the menu cursor.\n\
 If the screen did not change since last turn, your last action did nothing, so try something different.";
@@ -33,6 +33,7 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
     let mut stuck_turns: u32 = 0;
     let mut tried_while_stuck: Vec<&'static str> = Vec::new();
     let mut recent_positions: Vec<String> = Vec::new();
+    let mut objective = String::new();
     let notes = if cfg.notes_path.is_empty() {
         String::new()
     } else {
@@ -147,6 +148,11 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             }
             None => content,
         };
+        let content = if objective.is_empty() {
+            content
+        } else {
+            format!("{content}\nYour current objective (you set this yourself): {objective}")
+        };
         messages.push(Message {
             role: "user".into(),
             content,
@@ -158,7 +164,8 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             "properties": {
                 "thought": {"type": "string"},
                 "action": {"type": "string"},
-                "note": {"type": "string"}
+                "note": {"type": "string"},
+                "objective": {"type": "string"}
             },
             "required": ["thought", "action"]
         });
@@ -173,7 +180,13 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             }
         };
 
-        let (thought, mut buttons, note) = parse_reply(&reply);
+        let (thought, mut buttons, note, new_objective) = parse_reply(&reply);
+        if let Some(o) = new_objective {
+            let o = o.trim().to_string();
+            if !o.is_empty() {
+                objective = o;
+            }
+        }
         // Walking blind overshoots bends and doorways; cap movement bursts
         // at 3 so the model looks again sooner. Menu mashing (A/B) keeps 5.
         if buttons
@@ -227,7 +240,7 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
     }
 }
 
-fn parse_reply(reply: &str) -> (String, Vec<Button>, Option<String>) {
+fn parse_reply(reply: &str) -> (String, Vec<Button>, Option<String>, Option<String>) {
     // Schema-constrained replies are a JSON object; be lenient about any
     // stray text around it.
     let json = reply
@@ -249,10 +262,10 @@ fn parse_reply(reply: &str) -> (String, Vec<Button>, Option<String>) {
                     .take_while(|l| !l.to_ascii_uppercase().contains("ACTION:"))
                     .collect::<Vec<_>>()
                     .join("\n");
-                return (thought.chars().take(240).collect(), buttons, None);
+                return (thought.chars().take(240).collect(), buttons, None, None);
             }
         }
-        return (reply.chars().take(240).collect(), Vec::new(), None);
+        return (reply.chars().take(240).collect(), Vec::new(), None, None);
     };
     let thought = v
         .get("thought")
@@ -272,5 +285,9 @@ fn parse_reply(reply: &str) -> (String, Vec<Button>, Option<String>) {
         .get("note")
         .and_then(|n| n.as_str())
         .map(|n| n.chars().take(200).collect::<String>());
-    (thought, buttons, note)
+    let objective = v
+        .get("objective")
+        .and_then(|o| o.as_str())
+        .map(|o| o.chars().take(200).collect::<String>());
+    (thought, buttons, note, objective)
 }
