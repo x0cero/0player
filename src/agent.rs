@@ -173,7 +173,15 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
             }
         };
 
-        let (thought, buttons, note) = parse_reply(&reply);
+        let (thought, mut buttons, note) = parse_reply(&reply);
+        // Walking blind overshoots bends and doorways; cap movement bursts
+        // at 3 so the model looks again sooner. Menu mashing (A/B) keeps 5.
+        if buttons
+            .iter()
+            .any(|b| matches!(b, Button::Up | Button::Down | Button::Left | Button::Right))
+        {
+            buttons.truncate(3);
+        }
         if let (Some(n), false) = (&note, cfg.notes_path.is_empty()) {
             let n = n.trim();
             if !n.is_empty() && !notes.contains(n) {
