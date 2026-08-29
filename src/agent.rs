@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 const SYSTEM_PROMPT: &str = "You are playing a Game Boy game. Each turn you see a screenshot of the current screen.\n\
 The game runs in REAL TIME and keeps running while you think.\n\
-Reply as JSON with fields: \"thought\" (2-3 sentences at most on what is happening and your plan), \"action\" (1-5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT), optionally \"note\" (ONE short lesson worth remembering across play sessions: a map fact, a trigger, a trap; only when you learn something durable), and optionally \"objective\" (your CURRENT mission in one line; set it when your mission changes and it will be shown back to you every turn until you change it; keep it stable while working on one thing).\n\
+Reply as JSON with fields: \"thought\" (2-3 sentences at most on what is happening and your plan), \"action\" (EITHER 1-5 button names separated by spaces, chosen from: A B START SELECT UP DOWN LEFT RIGHT, OR the word GOTO followed by a tile coordinate, like GOTO 12 5, which walks you automatically to walkable tile x=12,y=5 on the current map using pathfinding - prefer GOTO for all overworld travel), optionally \"note\" (ONE short lesson worth remembering across play sessions: a map fact, a trigger, a trap; only when you learn something durable), and optionally \"objective\" (your CURRENT mission in one line; set it when your mission changes and it will be shown back to you every turn until you change it; keep it stable while working on one thing).\n\
 Buttons are pressed one after another, one tap each. Example: {\"thought\": \"A dialog box is open, I'll advance it.\", \"action\": \"A\", \"note\": \"The lab exit mat is at the bottom-left of the room.\"}\n\
 Rules of thumb: START opens menus or begins the game from a title screen; A confirms and talks to people or advances text; B cancels; the d-pad moves the character or the menu cursor.\n\
 If the screen did not change since last turn, your last action did nothing, so try something different.";
@@ -219,13 +219,19 @@ pub fn run(emu: EmuHandle, llm: Ollama, cfg: AgentConfig, shared: Arc<Shared>) {
         };
         shared.publish(Event::Action(action_str.clone()));
 
-        for b in &buttons {
-            let name = b.name();
-            if !tried_while_stuck.contains(&name) {
-                tried_while_stuck.push(name);
+        let goto = parse_goto(&reply);
+        if let Some((gx, gy)) = goto {
+            shared.publish(Event::Action(format!("GOTO {gx} {gy}")));
+            emu.goto(gx, gy);
+        } else {
+            for b in &buttons {
+                let name = b.name();
+                if !tried_while_stuck.contains(&name) {
+                    tried_while_stuck.push(name);
+                }
             }
+            emu.press(buttons);
         }
-        emu.press(buttons);
 
         // History gets a capped thought plus the action actually taken, so a
         // degenerate reply can't teach the model to keep rambling.
@@ -290,4 +296,19 @@ fn parse_reply(reply: &str) -> (String, Vec<Button>, Option<String>, Option<Stri
         .and_then(|o| o.as_str())
         .map(|o| o.chars().take(200).collect::<String>());
     (thought, buttons, note, objective)
+}
+
+fn parse_goto(reply: &str) -> Option<(i32, i32)> {
+    let v: serde_json::Value = reply
+        .find('{')
+        .and_then(|st| reply.rfind('}').map(|e| &reply[st..=e]))
+        .and_then(|j| serde_json::from_str(j).ok())?;
+    let a = v.get("action")?.as_str()?;
+    let up = a.to_ascii_uppercase();
+    let pos = up.find("GOTO")?;
+    let mut nums = up[pos + 4..]
+        .split(|c: char| !c.is_ascii_digit() && c != '-')
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.parse::<i32>().ok());
+    Some((nums.next()?, nums.next()?))
 }

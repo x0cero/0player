@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 pub enum Cmd {
     /// Queue button taps, executed one after another in emulated time.
     Press(Vec<Button>),
+    /// Walk automatically to a map tile using BFS over the collision grid.
+    Goto { x: i32, y: i32 },
     /// Reply with a PNG of the screen (plus any adapter-provided game state)
     /// once the press queue is empty, so the model always sees the state
     /// AFTER its last action.
@@ -29,6 +31,10 @@ pub struct EmuHandle {
 impl EmuHandle {
     pub fn press(&self, buttons: Vec<Button>) {
         let _ = self.tx.send(Cmd::Press(buttons));
+    }
+
+    pub fn goto(&self, x: i32, y: i32) {
+        let _ = self.tx.send(Cmd::Goto { x, y });
     }
 
     /// Blocks until the queued presses have played out; returns the frame
@@ -78,6 +84,13 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
             loop {
                 match rx.try_recv() {
                     Ok(Cmd::Press(b)) => queue.extend(b),
+                    Ok(Cmd::Goto { x, y }) => match crate::adapter::find_path(&mut emu, x, y) {
+                        Ok(steps) => {
+                            queue.clear();
+                            queue.extend(steps);
+                        }
+                        Err(e) => alert = Some(format!("GOTO failed: {e}.")),
+                    },
                     Ok(Cmd::Screenshot { scale, resp }) => pending_shot = Some((scale, resp)),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => return,
