@@ -7,7 +7,8 @@ use crate::emu::Emulator;
 /// EWRAM; the player's tile coordinates are the first two u16 fields.
 const FRLG_SAVEBLOCK1_PTR: u32 = 0x0300_5008;
 
-pub fn probe(emu: &mut Emulator) -> Option<String> {
+/// Raw tile coordinates, when readable.
+pub fn coords(emu: &mut Emulator) -> Option<(u16, u16)> {
     if !emu.title().starts_with("POKEMON FIRE") && !emu.title().starts_with("POKEMON LEAF") {
         return None;
     }
@@ -20,6 +21,11 @@ pub fn probe(emu: &mut Emulator) -> Option<String> {
     if x > 1000 || y > 1000 {
         return None;
     }
+    Some((x, y))
+}
+
+pub fn probe(emu: &mut Emulator) -> Option<String> {
+    let (x, y) = coords(emu)?;
     Some(format!(
         "Player tile position from game memory: x={x}, y={y}. \
          AXES: UP decreases y, DOWN increases y, LEFT decreases x, RIGHT increases x. \

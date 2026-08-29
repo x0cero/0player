@@ -64,6 +64,7 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
         let mut phase: u32 = 0; // frames left in current hold/gap
         let mut holding: Option<Button> = None;
         let mut pending_shot: Option<(u32, Sender<(Vec<u8>, Option<String>)>)> = None;
+        let mut last_pos: Option<(u16, u16)> = None;
         let mut frame: u64 = 0;
         let mut next_deadline = Instant::now();
 
@@ -84,10 +85,22 @@ pub fn spawn(mut emu: Emulator, cfg: RuntimeConfig, shared: Arc<Shared>) -> EmuH
                     emu.release(b);
                     phase = cfg.gap_frames; // let the game react before the next tap
                 } else if !queue.is_empty() {
-                    let b = queue.remove(0);
-                    emu.hold(b);
-                    holding = Some(b);
-                    phase = cfg.hold_frames;
+                    // A warp (doorway, stairs) teleports the player; the rest
+                    // of the queued taps were planned for the old room, so
+                    // drop them and let the model look again.
+                    let pos = crate::adapter::coords(&mut emu);
+                    if let (Some((x, y)), Some((lx, ly))) = (pos, last_pos) {
+                        let jump = (x as i32 - lx as i32).abs() + (y as i32 - ly as i32).abs();
+                        if jump > 2 {
+                            queue.clear();
+                        }
+                    }
+                    last_pos = pos.or(last_pos);
+                    if let Some(b) = (!queue.is_empty()).then(|| queue.remove(0)) {
+                        emu.hold(b);
+                        holding = Some(b);
+                        phase = cfg.hold_frames;
+                    }
                 }
             }
             phase = phase.saturating_sub(1);
